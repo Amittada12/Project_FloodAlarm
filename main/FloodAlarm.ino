@@ -1,20 +1,20 @@
 #include <ESP8266WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <Arduino_JSON.h>
-#include <FS.h>
-#include <LittleFS.h>
 
-// WiFi credentials
+// WiFi Credentials
 const char* ssid = "ume";
 const char* password = "123";
 
-// Sensor Pins
-const int waterLevel1 = A0;
-const int waterLevel2 = A1;
-const int waterLevel3 = A2;
-const int flowRatePin = D2;
+// Float Switch Pins
+const int waterLevelLow = D1;   // ระดับต่ำสุด - สีเขียว
+const int waterLevelMid = D2;   // ระดับปานกลาง - สีเหลือง
+const int waterLevelHigh = D3;  // ระดับสูงสุด - สีแดง
 
-// Flow Rate Variables
+// Flow Rate Sensor Pin
+const int flowRatePin = D4;
+
+// Variables for Flow Rate Sensor
 volatile int pulseCount = 0;
 float flowRate = 0;
 unsigned long previousMillis = 0;
@@ -25,20 +25,12 @@ AsyncWebServer server(80);
 // JSON variable to hold sensor readings
 JSONVar sensorReadings;
 
-// Variables for alert and notifications
+// Notification flag
 bool enableNotifications = true;
-float alertLevel1 = 1.30; // Meter
-float alertLevel2 = 1.50; // Meter
-float alertLevel3 = 1.80; // Meter
 
 // ISR for Flow Rate Sensor
 void pulseCounter() {
   pulseCount++;
-}
-
-// Get Water Level Readings
-float getWaterLevel(int pin) {
-  return analogRead(pin) * (3.3 / 1024.0); // Convert to Voltage
 }
 
 // Get Flow Rate
@@ -52,11 +44,16 @@ float getFlowRate() {
   return flowRate;
 }
 
+// Get Water Level State (return true if water is at this level or above)
+bool getWaterLevel(int pin) {
+  return digitalRead(pin) == LOW; // Float Switch triggers LOW when water is at the level
+}
+
 // Prepare JSON Data
 String getSensorData() {
-  sensorReadings["waterLevel1"] = getWaterLevel(waterLevel1);
-  sensorReadings["waterLevel2"] = getWaterLevel(waterLevel2);
-  sensorReadings["waterLevel3"] = getWaterLevel(waterLevel3);
+  sensorReadings["waterLevelLow"] = getWaterLevel(waterLevelLow);
+  sensorReadings["waterLevelMid"] = getWaterLevel(waterLevelMid);
+  sensorReadings["waterLevelHigh"] = getWaterLevel(waterLevelHigh);
   sensorReadings["flowRate"] = getFlowRate();
   return JSON.stringify(sensorReadings);
 }
@@ -66,14 +63,13 @@ void setup() {
   Serial.begin(115200);
 
   // Initialize Pins
+  pinMode(waterLevelLow, INPUT_PULLUP);
+  pinMode(waterLevelMid, INPUT_PULLUP);
+  pinMode(waterLevelHigh, INPUT_PULLUP);
   pinMode(flowRatePin, INPUT);
-  attachInterrupt(digitalPinToInterrupt(flowRatePin), pulseCounter, RISING);
 
-  // Initialize LittleFS
-  if (!LittleFS.begin()) {
-    Serial.println("An error occurred while mounting LittleFS");
-    return;
-  }
+  // Attach Interrupt for Flow Rate Sensor
+  attachInterrupt(digitalPinToInterrupt(flowRatePin), pulseCounter, RISING);
 
   // Connect to WiFi
   WiFi.begin(ssid, password);
@@ -83,10 +79,10 @@ void setup() {
   }
   Serial.println("Connected! IP: " + WiFi.localIP().toString());
 
-  // Serve static files
-  server.serveStatic("/", LittleFS, "/index.html");
-  server.serveStatic("/styles.css", LittleFS, "/styles.css");
-  server.serveStatic("/script.js", LittleFS, "/script.js");
+  // Serve Web Page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send(200, "text/html", htmlPage());
+  });
 
   // API Endpoint to get sensor data
   server.on("/api/sensors", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -105,17 +101,86 @@ void setup() {
 
 void loop() {
   // Monitor Water Levels and Alert
-  float level1 = getWaterLevel(waterLevel1);
-  float level2 = getWaterLevel(waterLevel2);
-  float level3 = getWaterLevel(waterLevel3);
+  bool levelLow = getWaterLevel(waterLevelLow);
+  bool levelMid = getWaterLevel(waterLevelMid);
+  bool levelHigh = getWaterLevel(waterLevelHigh);
 
   if (enableNotifications) {
-    if (level3 >= alertLevel3) {
+    if (levelHigh) {
       Serial.println("Red Alert: Extreme Danger!");
-    } else if (level2 >= alertLevel2) {
+    } else if (levelMid) {
       Serial.println("Orange Alert: High Risk!");
-    } else if (level1 >= alertLevel1) {
+    } else if (levelLow) {
       Serial.println("Yellow Alert: Moderate Risk!");
+    } else {
+      Serial.println("Green: Safe Water Level");
     }
   }
+}
+
+// HTML Web Page
+String htmlPage() {
+  return R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Flood Monitoring</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; margin: 0; padding: 20px; }
+    .status { font-size: 1.5em; margin: 20px; padding: 20px; border-radius: 5px; }
+    .green { background: #4caf50; color: white; }
+    .yellow { background: #ffc107; color: black; }
+    .red { background: #f44336; color: white; }
+    .chart { margin: 30px auto; }
+  </style>
+</head>
+<body>
+  <h1>Flood Monitoring System</h1>
+  <div id="status" class="status green">Safe Water Level</div>
+  <div>
+    <canvas id="waterLevelChart" width="400" height="200"></canvas>
+  </div>
+  <button onclick="toggleNotifications()">Toggle Notifications</button>
+  <script>
+    const statusDiv = document.getElementById('status');
+    const ctx = document.getElementById('waterLevelChart').getContext('2d');
+    let chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [{ label: 'Water Level', data: [] }] },
+    });
+
+    function updateStatus(levelLow, levelMid, levelHigh) {
+      if (levelHigh) {
+        statusDiv.className = 'status red';
+        statusDiv.textContent = 'Red Alert: Extreme Danger!';
+      } else if (levelMid) {
+        statusDiv.className = 'status yellow';
+        statusDiv.textContent = 'Orange Alert: High Risk!';
+      } else if (levelLow) {
+        statusDiv.className = 'status yellow';
+        statusDiv.textContent = 'Yellow Alert: Moderate Risk!';
+      } else {
+        statusDiv.className = 'status green';
+        statusDiv.textContent = 'Green: Safe Water Level';
+      }
+    }
+
+    async function fetchData() {
+      const res = await fetch('/api/sensors');
+      const data = await res.json();
+      updateStatus(data.waterLevelLow, data.waterLevelMid, data.waterLevelHigh);
+      chart.data.labels.push(new Date().toLocaleTimeString());
+      chart.data.datasets[0].data.push(data.flowRate);
+      chart.update();
+    }
+
+    setInterval(fetchData, 2000);
+
+    async function toggleNotifications() {
+      await fetch('/api/toggle-notifications', { method: 'POST' });
+    }
+  </script>
+</body>
+</html>
+)rawliteral";
 }
