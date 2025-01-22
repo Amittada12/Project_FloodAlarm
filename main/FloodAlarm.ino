@@ -3,16 +3,16 @@
 #include <Arduino_JSON.h>
 
 // WiFi Credentials
-const char* ssid = "ume";
-const char* password = "123";
+const char* ssid = "Your_SSID";          // ใส่ชื่อ WiFi ของคุณ
+const char* password = "Your_PASSWORD";  // ใส่รหัสผ่าน WiFi ของคุณ
 
 // Float Switch Pins
-const int waterLevelLow = D1;   // ระดับต่ำสุด - สีเขียว
-const int waterLevelMid = D2;   // ระดับปานกลาง - สีเหลือง
-const int waterLevelHigh = D3;  // ระดับสูงสุด - สีแดง
+const int waterLevelLow = 5;   // ระดับต่ำสุด - สีเขียว
+const int waterLevelMid = 4;   // ระดับปานกลาง - สีเหลือง
+const int waterLevelHigh = 0;  // ระดับสูงสุด - สีแดง
 
 // Flow Rate Sensor Pin
-const int flowRatePin = D4;
+const int flowRatePin = 2;
 
 // Variables for Flow Rate Sensor
 volatile int pulseCount = 0;
