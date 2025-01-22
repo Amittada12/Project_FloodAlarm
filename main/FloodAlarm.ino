@@ -3,8 +3,8 @@
 #include <Arduino_JSON.h>
 
 // WiFi Credentials
-const char* ssid = "Your_SSID";          // ใส่ชื่อ WiFi ของคุณ
-const char* password = "Your_PASSWORD";  // ใส่รหัสผ่าน WiFi ของคุณ
+const char* ssid = ">3";          // ใส่ชื่อ WiFi ของคุณ
+const char* password = "12345678";  // ใส่รหัสผ่าน WiFi ของคุณ
 
 // Float Switch Pins
 const int waterLevelLow = 5;   // ระดับต่ำสุด - สีเขียว
