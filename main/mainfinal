@@ -1,0 +1,183 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+
+// กำหนดขาของ Float Sensor
+#define Float_Switch1 D1  // Sensor ตัวที่ 1 (Green)
+#define Float_Switch2 D2  // Sensor ตัวที่ 2 (Yellow)
+#define Float_Switch3 D3  // Sensor ตัวที่ 3 (Orange)
+
+// WiFi Credentials
+const char* ssid = ">3";          // ใส่ชื่อ WiFi ของคุณ
+const char* password = "12345678";  // ใส่รหัสผ่าน WiFi
+
+// สร้าง Web Server
+ESP8266WebServer server(80);
+
+// ฟังก์ชันอ่านค่าระดับน้ำ
+String getWaterLevel() {
+    // อ่านค่าจาก sensors
+    int s1 = digitalRead(Float_Switch1);
+    int s2 = digitalRead(Float_Switch2);
+    int s3 = digitalRead(Float_Switch3);
+    
+    // Debug print
+    Serial.printf("Sensors: S1=%d, S2=%d, S3=%d\n", s1, s2, s3);
+    
+    if (s1 == LOW) {
+        Serial.println("Level: Green");
+        return "Green";    // ระดับต่ำสุด
+    }
+    else if (s2 == LOW) {
+        Serial.println("Level: Yellow");
+        return "Yellow";   // ระดับปานกลาง
+    }
+    else if (s3 == LOW) {
+        Serial.println("Level: Orange");
+        return "Orange";   // ระดับสูง (แก้ไขการสะกดผิด)
+    }
+    else {
+        Serial.println("Level: Red");
+        return "Red";      // ระดับสูงสุด (เตือนภัย)
+    }
+}
+
+void handleRoot() {
+    server.send(200, "text/html", R"rawliteral(
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>ESP8266 Flood Monitoring</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; }
+            #status { font-size: 1.5em; }
+        </style>
+        <script>
+        let labels = [];
+        let data = [];
+        async function fetchData() {
+            try {
+                const res = await fetch('/api/waterlevel');
+                const level = await res.text();
+                const time = new Date().toLocaleTimeString();
+                
+                console.log("Received level:", level); // Debug log
+                
+                labels.push(time);
+                data.push(level);
+                if (labels.length > 10) {
+                    labels.shift();
+                    data.shift();
+                }
+                
+                updateChart();
+                document.getElementById("status").innerText = "Current Level: " + level;
+                
+                if (level === "Red") {
+                    alert("WARNING! Water Level is at RED (Extreme Danger!)");
+                }
+            } catch (error) {
+                console.error("Error fetching data:", error);
+            }
+        }
+        
+        function updateChart() {
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = data.map(lvl => lvl === "Red" ? 4 : lvl === "Orange" ? 3 : lvl === "Yellow" ? 2 : 1);
+            chart.update();
+        }
+        
+        // เริ่มต้นเรียกข้อมูลทันทีและทุก 5 วินาที
+        document.addEventListener('DOMContentLoaded', function() {
+            fetchData();
+            setInterval(fetchData, 5000);
+        });
+        </script>
+    </head>
+    <body>
+        <h1>Flood Monitoring System</h1>
+        <h2 id="status">Current Level: Loading...</h2>
+        <canvas id="waterLevelChart" width="400" height="200"></canvas>
+        <script>
+        let ctx = document.getElementById('waterLevelChart').getContext('2d');
+        let chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Water Level',
+                    data: [],
+                    backgroundColor: ['green', 'yellow', 'orange', 'red'],
+                    borderColor: 'blue',
+                    borderWidth: 2,
+                    tension: 0.1
+                }]
+            },
+            options: {
+                scales: {
+                    y: { 
+                        ticks: { 
+                            stepSize: 1, 
+                            callback: function(value) { 
+                                return ["Green", "Yellow", "Orange", "Red"][value-1]; 
+                            } 
+                        }, 
+                        beginAtZero: true, 
+                        max: 4 
+                    }
+                }
+            }
+        });
+        </script>
+    </body>
+    </html>
+    )rawliteral");
+}
+
+void handleWaterLevel() {
+    String level = getWaterLevel();
+    Serial.println("Sending water level: " + level);
+    server.send(200, "text/plain", level);
+}
+
+void setup() {
+    Serial.begin(115200);
+    
+    // ตั้งค่า pins
+    pinMode(Float_Switch1, INPUT_PULLUP);
+    pinMode(Float_Switch2, INPUT_PULLUP);
+    pinMode(Float_Switch3, INPUT_PULLUP);
+    
+    // เชื่อมต่อ WiFi
+    Serial.printf("\nConnecting to WiFi: %s\n", ssid);
+    WiFi.begin(ssid, password);
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi Connected!");
+        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("MAC Address: %s\n", WiFi.macAddress().c_str());
+        Serial.printf("Signal Strength (RSSI): %d dBm\n", WiFi.RSSI());
+    } else {
+        Serial.println("\nWiFi Connection FAILED");
+    }
+
+    // ตั้งค่า web server
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/api/waterlevel", HTTP_GET, handleWaterLevel);
+    server.begin();
+    Serial.println("HTTP server started");
+}
+
+void loop() {
+    server.handleClient();
+    delay(100); // เพิ่ม delay เพื่อให้ระบบทำงานได้เสถียรขึ้น
+}
