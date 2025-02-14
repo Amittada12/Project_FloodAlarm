@@ -2,8 +2,7 @@
 1.วางแผนการซื้ออุปกรณ์ ดูอุปกรณ์ว่าต้องการใช้อะไรบ้าง ต้องการงบกี่บาท ในที่นี้อุปกรณ์ที่เราต้องใช้ประกอบด้วย 
 
 * Board ESP8266
-* Sensor Waterlevel
-* Sensor Flowrate
+* Water level Float Switch
 
   
 ![Floodalarm](https://github.com/user-attachments/assets/d566802b-8703-44a5-b649-ff463b77d27b)
