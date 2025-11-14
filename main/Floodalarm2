@@ -1,0 +1,247 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+
+// ========= CONFIGURATION =========
+#define Float_Switch1 D1   // ระดับน้ำต่ำ (เขียว)
+#define Float_Switch2 D2   // ระดับน้ำปานกลาง (เหลือง)
+#define Float_Switch3 D3   // ระดับน้ำสูง (ส้ม)
+#define TRIG_PIN D5        // Ultrasonic Trigger
+#define ECHO_PIN D6        // Ultrasonic Echo
+#define BUZZER_PIN D7      // Buzzer
+
+const char* ssid = ">3";            // ชื่อ WiFi
+const char* password = "12345678";  // รหัสผ่าน WiFi
+
+// ======= Telegram Configuration =======
+#define BOT_TOKEN "ใส่โทเคนบอทของคุณที่นี่"
+#define CHAT_ID "ใส่ CHAT ID ของคุณที่นี่"
+
+// สร้างอ็อบเจ็กต์ Telegram
+WiFiClientSecure secured_client;
+UniversalTelegramBot bot(BOT_TOKEN, secured_client);
+
+// ======= Web Server =======
+ESP8266WebServer server(80);
+
+// ======= ตัวแปรสำหรับตรวจจับการแจ้งเตือน =======
+String lastLevel = "";
+unsigned long lastSend = 0;
+
+// ======= ฟังก์ชันอ่านค่าจาก Ultrasonic =======
+long readUltrasonic() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  long distance = duration * 0.034 / 2;
+  return distance;
+}
+
+// ======= ฟังก์ชันอ่านค่าระดับน้ำ =======
+String getWaterLevel() {
+  int s1 = digitalRead(Float_Switch1);
+  int s2 = digitalRead(Float_Switch2);
+  int s3 = digitalRead(Float_Switch3);
+  long distance = readUltrasonic();
+
+  Serial.printf("Sensors: S1=%d, S2=%d, S3=%d, Distance=%ld cm\n", s1, s2, s3, distance);
+
+  if (s1 == LOW) return "Green";
+  else if (s2 == LOW) return "Yellow";
+  else if (s3 == LOW) return "Orange";
+  else return "Red";
+}
+
+// ======= ฟังก์ชันส่งข้อความ Telegram =======
+void sendTelegram(String message) {
+  if (WiFi.status() == WL_CONNECTED) {
+    bot.sendMessage(CHAT_ID, message, "");
+  }
+}
+
+// ======= หน้าหลักเว็บ Dashboard =======
+void handleRoot() {
+  server.send(200, "text/html", R"rawliteral(
+  <!DOCTYPE html>
+  <html lang="th">
+  <head>
+      <meta charset="UTF-8">
+      <title>Flood Monitoring Dashboard</title>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
+      <style>
+          body {
+              font-family: 'Segoe UI', sans-serif;
+              margin: 0;
+              background: linear-gradient(135deg, #4facfe, #00f2fe);
+              color: #fff;
+              text-align: center;
+          }
+          header {
+              background: rgba(0, 0, 0, 0.25);
+              padding: 20px;
+              backdrop-filter: blur(5px);
+              box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          }
+          h1 { margin: 0; font-size: 28px; letter-spacing: 1px; }
+          #statusBox {
+              display: inline-flex;
+              align-items: center;
+              gap: 10px;
+              margin: 15px auto;
+              padding: 12px 25px;
+              border-radius: 20px;
+              font-size: 1.2em;
+              background-color: rgba(255,255,255,0.15);
+              transition: all 0.4s ease;
+          }
+          #statusIcon { font-size: 1.6em; animation: pulse 2s infinite; }
+          @keyframes pulse {
+              0% { transform: scale(1); opacity: 1; }
+              50% { transform: scale(1.2); opacity: 0.7; }
+              100% { transform: scale(1); opacity: 1; }
+          }
+          main {
+              margin: 20px auto;
+              width: 90%;
+              max-width: 650px;
+              background: rgba(255,255,255,0.1);
+              padding: 20px;
+              border-radius: 20px;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+          }
+          canvas {
+              background: #fff;
+              border-radius: 15px;
+              padding: 10px;
+          }
+          button {
+              background: #fff;
+              color: #0078ff;
+              border: none;
+              border-radius: 25px;
+              padding: 10px 20px;
+              margin: 10px;
+              font-size: 16px;
+              cursor: pointer;
+              transition: all 0.3s ease;
+              box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+          }
+          button:hover {
+              background: #0078ff;
+              color: #fff;
+              transform: scale(1.05);
+          }
+          footer {
+              margin-top: 20px;
+              font-size: 13px;
+              color: #eee;
+          }
+      </style>
+      <script>
+      let labels = [];
+      let data = [];
+      let autoUpdate = true;
+
+      async function fetchData() {
+          if (!autoUpdate) return;
+          try {
+              const res = await fetch('/api/waterlevel');
+              const level = await res.text();
+              const time = new Date().toLocaleTimeString();
+              labels.push(time);
+              data.push(level);
+              if (labels.length > 10) { labels.shift(); data.shift(); }
+              updateChart();
+              updateStatus(level);
+              updateGauge(level);
+              if (level === "Red") {
+                  alert("🚨 ระดับน้ำถึงจุดอันตรายสูงสุด! โปรดระวัง!");
+              }
+          } catch (error) {
+              console.error("Error fetching data:", error);
+          }
+      }
+
+      function updateChart() {
+          chart.data.labels = labels;
+          chart.data.datasets[0].data = data.map(lvl =>
+              lvl === "Red" ? 4 : lvl === "Orange" ? 3 : lvl === "Yellow" ? 2 : 1
+          );
+          chart.update();
+      }
+
+      function updateStatus(level) {
+          const box = document.getElementById("statusBox");
+          const text = document.getElementById("statusText");
+          const icon = document.getElementById("statusIcon");
+
+          if (level === "Green") {
+              box.style.background = "rgba(0,255,0,0.3)";
+              icon.textContent = "💧";
+              text.textContent = "ระดับน้ำปกติ (Green)";
+          } else if (level === "Yellow") {
+              box.style.background = "rgba(255,255,0,0.4)";
+              icon.textContent = "⚠️";
+              text.textContent = "ระดับน้ำเฝ้าระวัง (Yellow)";
+          } else if (level === "Orange") {
+              box.style.background = "rgba(255,165,0,0.5)";
+              icon.textContent = "🟠";
+              text.textContent = "ระดับน้ำเสี่ยง (Orange)";
+          } else {
+              box.style.background = "rgba(255,0,0,0.5)";
+              icon.textContent = "🚨";
+              text.textContent = "ระดับน้ำอันตราย (Red)";
+          }
+      }
+
+      function updateGauge(level) {
+          const value = level === "Red" ? 4 : level === "Orange" ? 3 : level === "Yellow" ? 2 : 1;
+          const color = level === "Red" ? "#ff0000" : level === "Orange" ? "#ff9800" : level === "Yellow" ? "#ffeb3b" : "#4caf50";
+          gaugeChart.data.datasets[0].data = [value, 4 - value];
+          gaugeChart.data.datasets[0].backgroundColor = [color, "rgba(255,255,255,0.1)"];
+          gaugeChart.update();
+      }
+
+      function toggleAutoUpdate() {
+          autoUpdate = !autoUpdate;
+          document.getElementById("toggleBtn").innerText =
+              autoUpdate ? "⏸ หยุดอัปเดตอัตโนมัติ" : "▶ เริ่มอัปเดตอัตโนมัติ";
+      }
+
+      function refreshNow() { fetchData(); }
+
+      document.addEventListener('DOMContentLoaded', function() {
+          fetchData();
+          setInterval(fetchData, 5000);
+      });
+      </script>
+  </head>
+  <body>
+      <header>
+          <h1>🌊 Flood Monitoring Dashboard</h1>
+          <div id="statusBox">
+              <span id="statusIcon">💧</span>
+              <span id="statusText">กำลังโหลดข้อมูล...</span>
+          </div>
+      </header>
+
+      <main>
+          <canvas id="gauge" width="220" height="130"></canvas>
+          <br>
+          <canvas id="waterLevelChart" width="400" height="200"></canvas>
+          <div>
+              <button id="refreshBtn" onclick="refreshNow()">🔄 รีเฟรชข้อมูล</button>
+              <button id="toggleBtn" onclick="toggleAutoUpdate()">⏸ หยุดอัปเดตอัตโนมัติ</button>
+          </div>
+      </main>
+
+      <footer>
+          © 2025 Flood Alert IoT Project | ESP8266 + IoT System
+      </footer>
+
+      <
