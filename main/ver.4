@@ -1,0 +1,167 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+
+// ========= CONFIG =========
+#define Float_Switch1 14
+#define Float_Switch2 27
+#define Float_Switch3 26
+#define TRIG_PIN 25
+#define ECHO_PIN 33
+#define BUZZER_PIN 32
+
+const char* ssid = ">3";
+const char* password = "12345678";
+
+// ===== Telegram =====
+#define BOT_TOKEN "8516215061:AAExiO6Kx10CN3yLy5qbJHOzuG75EV7iOgY"
+#define CHAT_ID "8240716629"
+
+WiFiClientSecure secured_client;
+UniversalTelegramBot bot(BOT_TOKEN, secured_client);
+
+// ===== Web Server =====
+WebServer server(80);
+
+// ===== Ultrasonic =====
+long readUltrasonic() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  return duration * 0.034 / 2;   // cm
+}
+
+// ===== Water Level (FLOAT SWITCH) =====
+String getWaterLevel() {
+  if (digitalRead(Float_Switch1) == LOW) return "Green";
+  if (digitalRead(Float_Switch2) == LOW) return "Yellow";
+  if (digitalRead(Float_Switch3) == LOW) return "Orange";
+  return "Red";
+}
+
+// ===== API FLOAT =====
+void handleWaterLevel() {
+  server.send(200, "text/plain", getWaterLevel());
+}
+
+// ===== API ULTRASONIC (เพิ่มใหม่) =====
+void handleUltrasonic() {
+  long d = readUltrasonic();
+  server.send(200, "text/plain", String(d));
+}
+
+// ===== Dashboard =====
+void handleRoot() {
+  server.send(200, "text/html", R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Flood Monitoring ESP32</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body{background:#1e90ff;color:white;text-align:center;font-family:Arial}
+main{background:rgba(255,255,255,.1);padding:20px;border-radius:20px;width:90%;max-width:600px;margin:auto}
+canvas{background:white;border-radius:10px}
+.box{margin:15px;font-size:22px}
+</style>
+
+<script>
+let labels=[],data=[];
+
+async function fetchFloat(){
+ const r=await fetch('/api/waterlevel');
+ const l=await r.text();
+ labels.push(new Date().toLocaleTimeString());
+ data.push(l);
+ if(labels.length>10){labels.shift();data.shift();}
+ chart.data.labels=labels;
+ chart.data.datasets[0].data=data.map(v=>v=="Green"?1:v=="Yellow"?2:v=="Orange"?3:4);
+ chart.update();
+ document.getElementById("status").innerText=l;
+}
+
+async function fetchUltra(){
+ const r=await fetch('/api/ultrasonic');
+ const d=await r.text();
+ document.getElementById("ultra").innerText = d + " cm";
+}
+
+setInterval(()=>{
+ fetchFloat();
+ fetchUltra();
+},5000);
+</script>
+</head>
+
+<body>
+<h1>🌊 Flood Monitoring ESP32</h1>
+<main>
+  <div class="box">FLOAT STATUS : <span id="status">Loading...</span></div>
+  <div class="box">ULTRASONIC LEVEL : <span id="ultra">--</span></div>
+  <canvas id="chart"></canvas>
+</main>
+
+<script>
+const chart=new Chart(document.getElementById('chart'),{
+ type:'line',
+ data:{labels:[],datasets:[{label:'Water Level (Float)',data:[],borderColor:'white',borderWidth:3}]},
+ options:{scales:{y:{min:0,max:4,ticks:{callback:v=>["","Green","Yellow","Orange","Red"][v]}}}}
+});
+</script>
+</body>
+</html>
+)rawliteral");
+}
+
+// ===== SETUP =====
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(Float_Switch1, INPUT_PULLUP);
+  pinMode(Float_Switch2, INPUT_PULLUP);
+  pinMode(Float_Switch3, INPUT_PULLUP);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected");
+
+  secured_client.setInsecure();
+
+  server.on("/", handleRoot);
+  server.on("/api/waterlevel", handleWaterLevel);
+  server.on("/api/ultrasonic", handleUltrasonic);   // เพิ่ม
+  server.begin();
+}
+
+// ===== LOOP =====
+void loop() {
+  server.handleClient();
+
+  // แสดง Ultrasonic ใน IDE (อย่างเดียว ไม่แจ้งเตือน)
+  long d = readUltrasonic();
+  Serial.print("Ultrasonic Water Level: ");
+  Serial.print(d);
+  Serial.println(" cm");
+
+  // แจ้งเตือนจาก FLOAT เท่านั้น
+  if (getWaterLevel() == "Red") {
+    digitalWrite(BUZZER_PIN, HIGH);
+    bot.sendMessage(CHAT_ID, "🚨 Flood Alert (FLOAT SWITCH RED)", "");
+    delay(3000);
+  } else {
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+
+  delay(2000);
+}
